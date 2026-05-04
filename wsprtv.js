@@ -752,7 +752,7 @@ function extractU4BQ01Payload(p) {
   return [m, n];
 }
 
-function processU4BSlot1Message(spot, ignore_is_valid_gps = false) {
+function processU4BSlot1Message(spot) {
   if (spot.slots[1].cs.length != 6) {
     return false;
   }
@@ -767,19 +767,18 @@ function processU4BSlot1Message(spot, ignore_is_valid_gps = false) {
   }
   spot.voltage = ((Math.floor(n / 168) + 20) % 40) * 0.05 + 3;
   spot.temp = (Math.floor(n / 6720) % 90) - 50;
-  const is_valid_gps = Math.floor(n / 2) % 2;
-  if (!ignore_is_valid_gps && !is_valid_gps && params.version < 100) {
-    // Invalid GPS bit
-    spot.is_invalid_gps = true;
-    return true;
-  }
   const p = Math.floor(m / 1068);
   spot.grid = spot.grid + String.fromCharCode(97 + Math.floor(p / 24)) +
       String.fromCharCode(97 + (p % 24));
   spot.speed = (Math.floor(n / 4) % 42) * 2 * 1.852;
   spot.altitude = (m % 1068) * 20;
-
-  if (!ignore_is_valid_gps && params.version >= 100) {
+  const is_valid_gps = Math.floor(n / 2) % 2;
+  if (!is_valid_gps && params.version < 100) {
+    // Invalid GPS bit
+    spot.is_invalid_gps = true;
+    return true;
+  }
+  if (params.version >= 100) {
     handleU4BVariants(spot, is_valid_gps);
   }
   return true;
@@ -1676,8 +1675,9 @@ function displayTrack() {
       // Grid6
       marker = L.circleMarker([spot.lat, spot.lon],
           { radius: 7, color: 'black',
-            fillColor: spot.is_unattached ?
-                'white' : (spot.fill || '#add8e6'),
+            fillColor: spot.is_invalid_gps ?
+                '#fbb' : (spot.is_unattached ?
+                    'white' : (spot.fill || '#add8e6')),
             weight: 1,
             stroke: true, fillOpacity: 1 });
     }
