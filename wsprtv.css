@@ -8,6 +8,7 @@ html, body {
 #map {
   height: 100%;
   width: 100%;
+  background: radial-gradient(circle at center, #888 0%, #555 100%);
 }
 
 #control_panel {
@@ -73,10 +74,22 @@ html, body {
   text-decoration: none;
 }
 
-#show_data_button, #close_data_button {
+#show_data_button, #change_map_type_button, #close_data_button {
   cursor: pointer;
   z-index: 1000;
   display: none;
+}
+
+#change_map_type_button {
+  text-shadow: 
+    -1px -1px 0 #888,
+     1px -1px 0 #888,
+    -1px  1px 0 #888,
+     1px  1px 0 #888;
+  position: absolute;
+  font-size: 26px;
+  top: 90px;
+  left: 11px;
 }
 
 #show_data_button {
@@ -87,7 +100,7 @@ html, body {
      1px  1px 0 #888;
   position: absolute;
   font-size: 26px;
-  top: 90px;
+  top: 135px;
   left: 11px;
 }
 
@@ -224,6 +237,17 @@ td.wspr_cell {
 
 .leaflet-tooltip {
   font-size: 13px;
+}
+
+.maplibregl-ctrl-top-left {
+  left: 3px;
+  top: 5px;
+}
+
+.maplibregl-popup-content {
+  padding: 4px 10px;
+  font-size: 13px;
+  line-height: 1.2;
 }
 
 .spinner {

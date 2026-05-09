@@ -30,17 +30,14 @@
 
 // Global vars
 let map;  // Leaflet map object
-let markers = [];
-let marker_group;
-let marker_line;
-let prediction_line;
-let prediction_markers;
-let last_marker;  // used to periodically update the 'last ago' message
-let selected_marker;  // currently selected (clicked) marker
-let highlighted_spot;
 
 let data = [];  // raw wspr.live telemetry data
 let spots = [];  // merged / annotated telemetry data
+
+let highlighted_spot;
+let selected_spot;
+let first_attached_spot;
+let last_attached_spot;
 
 let params;  // form / URL params
 let debug = 0;  // controls console logging
@@ -78,8 +75,6 @@ let update_task;  // telemetry / map update task
 let last_data_view_scroll_pos = 0;
 
 let is_mobile;  // running on a mobile device
-
-let solar_isoline;
 
 // WSPR band info. For each band, the value is
 // [U4B start minute offset, WSPR Live band id, start freq].
@@ -448,8 +443,8 @@ async function runQuery(query) {
 }
 
 async function runTawhiriPrediction() {
-  clearPrediction();
-  const spot = selected_marker.spot;
+  map.clearPrediction();
+  const spot = selected_spot;
   closeSpotInfo();
 
   const url_prefix = (Date.now() - spot.ts < 7 * 3600 * 1000) ?
@@ -507,41 +502,7 @@ async function runTawhiriPrediction() {
     }
     last_point = p;
   }
-  if (nomirror_param == null) {
-    path = [...path,
-            ...path.map(l => l.map(p => [p[0], p[1] + 360])),
-            ...path.map(l => l.map(p => [p[0], p[1] - 360]))];
-  }
-  prediction_line = L.polyline(path, { color: '#777', weight: 2 });
-  prediction_line.addTo(map);
-
-  prediction_markers = [];
-  let current_location_marker;
-  for (const offset of (nomirror_param == null) ? [0, 360, -360] : [0]) {
-    for (const [ts, lat, lon, speed, current_location] of markers) {
-      const radius = current_location ? 7 :
-          (((params.use_utc ? ts.getUTCHours() : ts.getHours()) == 0) ? 6 : 4);
-      let marker = L.circleMarker(
-          [lat, lon + offset],
-          { radius: radius,
-            color: current_location ? 'red' : 'black',
-            fillColor: '#bbb', weight: 1, stroke: true,
-            fillOpacity: 1 }).addTo(map);
-      marker.on('click', function(e) {
-        L.DomEvent.stopPropagation(e);
-      });
-      const sun_elevation = getSunElevation(ts, lat, lon);
-      const ts_suffix = params.use_utc ? ':00 UTC | ' : ':00 | ';
-      marker.bindTooltip(
-          (current_location ? 'Now | ' : (formatTimestamp(ts).slice(0, 13) +
-              ts_suffix)) +
-          formatSpeed([speed, 0]) + ' | ' + sun_elevation + '&deg;',
-          { direction: 'top', opacity: 0.8 });
-      prediction_markers.push(marker);
-      if (current_location) current_location_marker = marker;
-    }
-    if (current_location_marker) current_location_marker.bringToFront();
-  }
+  map.displayPrediction(markers, path);
 }
 
 // Imports data from wspr.live for further processing:
@@ -1197,7 +1158,8 @@ function setGrid(spot) {
 
 // Categorizes spots on whether they should be part of the track
 function categorizeSpots() {
-  let last_attached_spot;
+  first_attached_spot = null;
+  last_attached_spot = null;
   for (let i = 0; i < spots.length; i++) {
     const spot = spots[i];
     if (spot.is_invalid_gps ||
@@ -1265,6 +1227,7 @@ function categorizeSpots() {
         }
       }
     }
+    if (!first_attached_spot) first_attached_spot = spot;
     last_attached_spot = spot;
   }
 }
@@ -1477,7 +1440,7 @@ function computeTrackDistance(spots) {
       last_spot = spot;
     } else {
       const segment_dist = getDistance(spot, last_spot);
-      if (segment_dist > 100000 || spot == last_marker.spot) {
+      if (segment_dist > 100000 || spot == last_attached_spot) {
         dist += segment_dist;
         last_spot = spot;
       }
@@ -1508,37 +1471,15 @@ function getNumLaps(spots) {
   return max_num_degrees / 360;
 }
 
-function clearPrediction() {
-  if (prediction_line) {
-    map.removeLayer(prediction_line);
-    prediction_markers.forEach(marker => map.removeLayer(marker));
-    prediction_line = null;
-    prediction_markers = null;
-  }
-}
-
 // Removes all existing markers and segments from the map
 function clearTrack() {
-  if (marker_group) {
-    marker_group.clearLayers();
-    map.removeLayer(marker_group);
-    if (marker_line) map.removeLayer(marker_line);
-    markers = [];
-    marker_group = null;
-    marker_line = null;
-  }
-
+  map.clear();
+  selected_spot = null;
   document.getElementById('spot_info').style.display = 'none';
   document.getElementById('synopsis').innerHTML = '';
   document.getElementById('update_countdown').innerHTML = '';
   document.getElementById('show_data_button').style.display = 'none';
   document.getElementById('aux_info').style.display = 'none';
-  if (selected_marker) {
-    hideMarkerRXInfo(selected_marker);
-  }
-  clearPrediction();
-  selected_marker = null;
-  last_marker = null;
 }
 
 function createToggleUTCLink(value) {
@@ -1627,120 +1568,16 @@ function extendPath(path, lat, lon, great_circle = false,
   last_path.push([lat, lon]);
 }
 
-function mirrorTrack() {
-  for (const marker of markers) {
-    let marker1 = L.circleMarker(
-        [marker.getLatLng().lat, marker.getLatLng().lng + 360],
-        marker.options).addTo(marker_group);
-    marker1.spot = marker.spot;
-    let marker2 = L.circleMarker(
-        [marker.getLatLng().lat, marker.getLatLng().lng - 360],
-        marker.options).addTo(marker_group);
-    marker2.spot = marker.spot;
-  }
-  if (marker_line) {
-    // Mirror marker line
-    const lat_lons1 = marker_line.getLatLngs().map(l =>
-        l.map((p) => [p.lat, p.lng + 360]));
-    const lat_lons2 = marker_line.getLatLngs().map(l =>
-        l.map((p) => [p.lat, p.lng - 360]));
-    marker_line.setLatLngs(
-        [...marker_line.getLatLngs(), lat_lons1, lat_lons2]);
-  }
-}
-
 // Draws the track on the map
 function displayTrack() {
   clearTrack();
-  marker_group = L.featureGroup();
-
-  let highlighted_marker;
-  for (let i = 0; i < spots.length; i++) {
-    let spot = spots[i];
-    if (spot.is_unattached && show_unattached_param == null) {
-      continue;
-    }
-
-    let marker = null;
-    if (spot.grid.length < 6) {
-      // Grid4
-      marker = L.circleMarker([spot.lat, spot.lon],
-          { radius: 5, color: 'black',
-            fillColor: spot.is_invalid_gps ?
-                '#fbb' : (spot.is_unattached ?
-                    'white' : (spot.fill || '#cfefff')),
-            weight: 1,
-            stroke: true, fillOpacity: 1 });
-    } else {
-      // Grid6
-      marker = L.circleMarker([spot.lat, spot.lon],
-          { radius: 7, color: 'black',
-            fillColor: spot.is_invalid_gps ?
-                '#fbb' : (spot.is_unattached ?
-                    'white' : (spot.fill || '#add8e6')),
-            weight: 1,
-            stroke: true, fillOpacity: 1 });
-    }
-    if (spot == highlighted_spot) {
-      highlighted_marker = marker;
-    }
-    marker.spot = spot;
-    marker.addTo(marker_group);
-    markers.push(marker);
-  }
-
-  // Add lines between markers
-  let path = [];
-  let first_attached_marker;
-  let last_attached_marker;
-  for (let i = 0; i < markers.length; i++) {
-    const marker = markers[i];
-    if (marker.spot.is_unattached) continue;
-    if (last_attached_marker) {
-      let lat1 = last_attached_marker.getLatLng().lat;
-      let lon1 = last_attached_marker.getLatLng().lng;
-      let lat2 = marker.getLatLng().lat;
-      let lon2 = marker.getLatLng().lng;
-    } else {
-      first_attached_marker = marker;
-      path = [[[marker.getLatLng().lat, marker.getLatLng().lng]]];
-    }
-    extendPath(path, marker.getLatLng().lat, marker.getLatLng().lng,
-               false, true);
-    last_attached_marker = marker;
-  }
-
-  if (params.tracker != 'unknown') {
-    marker_line = L.polyline(path, { color: '#00cc00' });
-    marker_line.addTo(map);
-  }
-
-  marker_group.addTo(map);
-
-  // Highlight first / last markers
-  if (first_attached_marker) {
-    first_attached_marker.setStyle({ fillColor: '#3cb371' });
-    first_attached_marker.bringToFront();
-  }
-  if (last_attached_marker) {
-    last_attached_marker.setStyle({ fillColor: 'red' });
-    last_attached_marker.bringToFront();
-  }
-
-  if (highlighted_marker) {
-    highlighted_marker.setStyle({ fillColor: '#ffdd03' });
-    highlighted_marker.bringToFront();
-  }
-
-  if (nomirror_param == null) mirrorTrack();
+  map.displayTrack(spots);
 
   // Populate flight synopsis
   let synopsis = document.getElementById('synopsis');
-  if (last_attached_marker) {
-    last_marker = last_attached_marker;
-    const last_spot = last_attached_marker.spot;
-    const first_spot = first_attached_marker.spot;
-    const duration = formatDuration(last_spot.ts, first_spot.ts);
+  if (last_attached_spot) {
+    const duration =
+        formatDuration(last_attached_spot.ts, first_attached_spot.ts);
     synopsis.innerHTML = `Duration: <b>${duration}</b>`;
     if (params.tracker != 'unknown') {
       // Distance is a clickable link to switch units
@@ -1753,46 +1590,50 @@ function displayTrack() {
             `<br>Laps: <b>${(num_laps - 0.0004999).toFixed(3)}</b>`;
       }
     }
-    const num_track_spots = markers.filter(m => !m.spot.is_unattached).length;
+    const num_track_spots = spots.filter(spot => !spot.is_unattached).length;
     synopsis.innerHTML += `<br><b>${num_track_spots}</b> track spot` +
         ((num_track_spots > 1) ? 's' : '');
-    if (num_track_spots != markers.length) {
-      const num_unattached_spots = markers.length - num_track_spots;
+    if (num_track_spots != spots.length) {
+      const num_unattached_spots = spots.length - num_track_spots;
       synopsis.innerHTML +=
           `<br><b>${num_unattached_spots}</b> unattached spot` +
           ((num_unattached_spots > 1) ? 's' : '');
     }
-    if ('altitude' in last_spot) {
+    if ('altitude' in last_attached_spot) {
       synopsis.innerHTML += '<br>Last altitude: <b>' +
           createToggleUnitsLink(formatAltitude(
-              [last_spot.altitude, getAltitudePrecision(last_spot)])) +
+              [last_attached_spot.altitude,
+               getAltitudePrecision(last_attached_spot)])) +
           '</b>';
     }
-    if ('speed' in last_spot) {
+    if ('speed' in last_attached_spot) {
       synopsis.innerHTML += '<br>Last speed: <b>' +
           createToggleUnitsLink(formatSpeed(
-              [last_spot.speed, getSpeedPrecision(last_spot)])) + '</b>';
+              [last_attached_spot.speed,
+               getSpeedPrecision(last_attached_spot)])) + '</b>';
     }
-    if ('temp' in last_spot) {
+    if ('temp' in last_attached_spot) {
       synopsis.innerHTML += '<br>Last temp: <b>' +
           createToggleUnitsLink(formatTemperature(
-              [last_spot.temp, getTemperaturePrecision(last_spot)])) + '</b>';
+              [last_attached_spot.temp,
+               getTemperaturePrecision(last_attached_spot)])) + '</b>';
     }
-    if ('voltage' in last_spot) {
+    if ('voltage' in last_attached_spot) {
       synopsis.innerHTML += '<br>Last voltage: <b>' + formatVoltage(
-          [last_spot.voltage, getVoltagePrecision(last_spot)]) + '</b>';
+          [last_attached_spot.voltage,
+           getVoltagePrecision(last_attached_spot)]) + '</b>';
     }
     const last_age = createToggleUTCLink(
-        formatDuration(new Date(), last_spot.ts));
+        formatDuration(new Date(), last_attached_spot.ts));
     synopsis.innerHTML += `<br><b>(<span id='last_age'>${last_age}` +
         `</span> ago)</b>`;
   } else {
     // No markers in the track
-    synopsis.innerHTML = `<b>${markers.length}</b> spot` +
-        ((markers.length != 1) ? 's' : '');
-    if (markers.length > 0) {
-      last_marker = markers[markers.length - 1];
-      const last_age = formatDuration(new Date(), last_marker.spot.ts);
+    synopsis.innerHTML = `<b>${spots.length}</b> spot` +
+        ((spots.length != 1) ? 's' : '');
+    if (spots.length > 0) {
+      last_spot = spots[spots.length - 1];
+      const last_age = formatDuration(new Date(), last_spot.ts);
       synopsis.innerHTML += `<br><b>(<span id='last_age'>${last_age}` +
           `</span> ago)</b>`;
     }
@@ -1808,160 +1649,31 @@ function displayTrack() {
 
   // Update solar isoline based on last 3 days of data
   const now = new Date();
-  if (solar_isoline && !sun_elevation_param && first_attached_marker &&
-      last_attached_marker.spot.ts - first_attached_marker.spot.ts >
-          12 * 3600 * 1000 &&
-      now - last_attached_marker.spot.ts < 14 * 86400 * 1000) {
+  if (!sun_elevation_param && first_attached_spot &&
+      last_attached_spot.ts - first_attached_spot.ts > 12 * 3600 * 1000 &&
+      now - last_attached_spot.ts < 14 * 86400 * 1000) {
     let min_sun_elevation = null;
     for (let i = 0; i < spots.length; i++) {
       const spot = spots[i];
       if (spot.is_unattached) continue;
-      if (last_attached_marker.spot.ts - spot.ts > 3 * 86400 * 1000) continue;
+      if (last_attached_spot.ts - spot.ts > 3 * 86400 * 1000)
+        continue;
       const sun_elevation = getSunElevation(spot.ts, spot.lat, spot.lon);
       min_sun_elevation = (min_sun_elevation == null) ?
           sun_elevation : Math.min(min_sun_elevation, sun_elevation);
     }
-    if (min_sun_elevation > 0 && min_sun_elevation < 60) {
-      solar_isoline.setElevation(min_sun_elevation);
-    } else {
-      solar_isoline.setElevation(null);
-    }
+    map.updateSolarIsoline(min_sun_elevation);
   }
-
-  marker_group.on('mouseover', onMarkerMouseover);
-  marker_group.on('mouseout', onMarkerMouseout);
-  marker_group.on('click', onMarkerClick);
-
   highlighted_spot = null;
-}
-
-function onMarkerMouseover(e) {
-  let marker = e.layer;
-  if (selected_marker && selected_marker != marker) {
-    hideMarkerRXInfo(selected_marker);
-    selected_marker = null;
-  }
-  displaySpotInfo(marker, e.containerPoint);
-}
-
-function onMarkerMouseout(e) {
-  let marker = e.layer;
-  if (marker != selected_marker) {
-    let spot_info = document.getElementById('spot_info');
-    spot_info.style.display = 'none';
-  }
-}
-
-function onMarkerClick(e) {
-  let marker = e.layer;
-  const spot = marker.spot;
-  if (marker == selected_marker) {
-    hideMarkerRXInfo(selected_marker);
-    document.getElementById('spot_info').style.display = 'none';
-    selected_marker = null;
-  } else {
-    if (selected_marker) {
-      hideMarkerRXInfo(selected_marker);
-    }
-    selected_marker = marker;
-    displaySpotInfo(marker, e.containerPoint);
-    if (!spot.tx_ts) {
-      marker.rx_markers = [];
-      marker.rx_paths = [];
-      const unique_rx = [...new Map(spot.slots.flatMap(slot => slot.rx).
-          map(rx => [rx.cs, rx])).values()];
-      unique_rx.forEach(rx => {
-        let rx_lat_lon = maidenheadToLatLon(rx.grid);
-        let dist = marker.getLatLng().distanceTo(rx_lat_lon);
-        const marker_lat_lon = marker.getLatLng().wrap();
-        let path = [[[marker_lat_lon.lat, marker_lat_lon.lng]]];
-        extendPath(path, rx_lat_lon[0], rx_lat_lon[1],
-                   (spots.length < 20000) ? true : false);
-        for (const offset of (nomirror_param == null) ? [0, 360, -360] : [0]) {
-          let rx_marker = L.circleMarker(
-              [rx_lat_lon[0], rx_lat_lon[1] + offset],
-              { radius: 6, color: 'black',
-                fillColor: 'yellow', weight: 1, stroke: true,
-                fillOpacity: 1 }).addTo(map);
-          rx_marker.on('click', function(e) {
-            L.DomEvent.stopPropagation(e);
-          });
-          rx_marker.bindTooltip(
-              `${rx.cs} ${formatDistance(dist)} ${rx.snr} dB`,
-                { direction: 'top', opacity: 0.8 });
-          marker.rx_markers.push(rx_marker);
-          const offset_path =
-              path.map(l => l.map((p) => [p[0], p[1] + offset]));
-          let rx_path = L.polyline(offset_path,
-              { weight: 2, color: 'blue', opacity: 0.4 }
-              ).addTo(map).bringToBack();
-          marker.rx_paths.push(rx_path);
-        }
-      });
-    }
-  }
-  L.DomEvent.stopPropagation(e);
 }
 
 function closeSpotInfo() {
   document.getElementById('spot_info').style.display = 'none';
-  if (selected_marker) {
-    hideMarkerRXInfo(selected_marker);
-    selected_marker = null;
-  }
+  map.hideRXInfo();
+  selected_spot = null;
 }
 
-function onMapClick(e) {
-  if (map.getContainer().querySelector('.leaflet-tooltip')) {
-    // Allow all tooltips to close
-    return;
-  }
-
-  // Display lat / lng / sun elevation of clicked point
-  const lat = e.latlng.lat;
-  const lon = e.latlng.lng;
-
-  const now = new Date();
-
-  const sun_elevation = getSunElevation(now, lat, lon);
-  const hrs_sunrise = (getTimeSinceSunrise(now, lat, lon) / 3600000);
-  const hrs_sunset = (getTimeToSunset(now, lat, lon) / 3600000);
-
-  // Update the display
-  let aux_info = document.getElementById('aux_info');
-  aux_info.innerHTML = `<span title="Latitude">${lat.toFixed(3)}</span>, ` +
-      `<span title="Longitude">${lon.toFixed(3)}</span> | ` +
-      `<span title="Sun elevation">${sun_elevation}&deg;</span> `;
-  if (!isNaN(hrs_sunrise)) {
-    aux_info.innerHTML += `/ ` +
-        `<span title="Hours since sunrise">${hrs_sunrise.toFixed(1)}</span>` +
-        ` / <span title="Hours to sunset">${hrs_sunset.toFixed(1)}</span> hr`;
-  }
-
-  if (selected_marker) {
-    // Display distance to the previously clicked marker
-    let dist = e.latlng.distanceTo(selected_marker.getLatLng());
-    aux_info.innerHTML += ' | <span title="Distance from selected marker">' +
-        formatDistance(dist) + '</span>';
-    // Clicking anywhere on the map hides the info bar for the last
-    // clicked marker
-    closeSpotInfo();
-  }
-  clearPrediction();
-  aux_info.style.display = 'block';
-}
-
-function hideMarkerRXInfo(marker) {
-  if (marker.rx_markers) {
-    marker.rx_markers.forEach(rx_marker => map.removeLayer(rx_marker));
-    delete marker.rx_markers;
-    marker.rx_paths.forEach(rx_path => map.removeLayer(rx_path));
-    delete marker.rx_paths;
-  }
-}
-
-function displaySpotInfo(marker, point) {
-  let spot = marker.spot;
+function displaySpotInfo(spot, point) {
   let spot_info = document.getElementById('spot_info');
   spot_info.style.left = point.x + 50 + 'px';
   spot_info.style.top = point.y - 20 + 'px';
@@ -2031,7 +1743,7 @@ function displaySpotInfo(marker, point) {
         `<br> ${formatDistance(max_rx_dist)} | ${avg_freq} Hz`;
   }
 
-  if (marker == selected_marker && spot.altitude) {
+  if (spot == selected_spot && spot.altitude) {
      spot_info.innerHTML += '<br><br>';
      if (Date.now() - spot.ts < 72 * 3600 * 1000) {
        spot_info.innerHTML += '<a href="#" onclick="runTawhiriPrediction(); ' +
@@ -2051,7 +1763,6 @@ function displaySpotInfo(marker, point) {
         'target=new>GoogleEarth View</a>' +
         '<br>(use CTRL-arrows<br>to look around)';
   }
-
   spot_info.style.display = 'block';
 }
 
@@ -2154,12 +1865,18 @@ function scheduleNextUpdate(update_ts = null) {
 }
 
 function importCustomData(data) {
+  first_attached_spot = null;
+  last_attached_spot = null;
   let spots = [];
   for (let i = 0; i < data.length; i++) {
     const spot = data[i];
     spot.ts = new Date(spot.ts);
     if (spot.ts < params.start_date) continue;
     if (end_date_param && spot.ts >= params.end_date) continue;
+    if (!spot.is_unattached) {
+      if (!first_attached_spot) first_attached_spot = spot;
+      last_attached_spot = spot;
+    }
     spots.push(spot);
   }
   return spots;
@@ -2266,8 +1983,8 @@ async function update(incremental_update = false) {
     }
 
     // Recenter the map on first load
-    if (!incremental_update && last_marker) {
-      map.setView(last_marker.getLatLng(), map.getZoom(), { animate: false });
+    if (!incremental_update && last_attached_spot) {
+      map.centerOn(last_attached_spot.lat, last_attached_spot.lon);
     }
 
     const now = new Date();
@@ -2779,7 +2496,7 @@ function highlightSpot(i) {
   }
   highlighted_spot = spot;
   closeDataView();
-  map.setView([spot.lat, spot.lon]);
+  map.centerOn(spot.lat, spot.lon);
 }
 
 function toggleWSPRView(i) {
@@ -2827,13 +2544,30 @@ function toggleWSPRView(i) {
   }
 }
 
+async function changeMapType() {
+  clearTrack();
+  const zoom_level = Math.round(localStorage.getItem('zoom_level') || 2);
+  localStorage.setItem('zoom_level', zoom_level);
+  map.remove();
+  if (map instanceof LeafletMap) {
+    map = new LibreMap();
+  } else {
+    map = new LeafletMap();
+  }
+  await map.waitToLoad();
+  if (params) displayTrack();
+  localStorage.setItem(
+      'map_type', (map instanceof LeafletMap) ? 'leaflet' : 'libre');
+}
+
 function showDataView() {
   // Hide map UI
   document.getElementById('map').style.display = 'none';
   document.getElementById('show_data_button').style.display = 'none';
+  document.getElementById('change_map_type_button').style.display = 'none';
   document.getElementById('control_panel').style.display = 'none';
-  if (selected_marker) {
-    highlighted_spot = selected_marker.spot;
+  if (selected_spot) {
+    highlighted_spot = selected_spot;
   }
   clearTrack();
   clearDataView();
@@ -3187,8 +2921,9 @@ function closeDataView() {
   document.getElementById('map').style.display = 'block';
 
   // Display map UI
-  map.invalidateSize();  // in case the screen rotated in data view
+  map.invalidate();  // in case the screen rotated in data view
   document.getElementById('show_data_button').style.display = 'block';
+  document.getElementById('change_map_type_button').style.display = 'block';
   document.getElementById('control_panel').style.display = 'block';
   displayTrack();
 }
@@ -3354,8 +3089,36 @@ function parseCustomTelemetrySpec() {
   return spec;
 }
 
+function displayAuxInfo(now, lat, lon, distance) {
+  const sun_elevation = getSunElevation(now, lat, lon);
+  const hrs_sunrise = (getTimeSinceSunrise(now, lat, lon) / 3600000);
+  const hrs_sunset = (getTimeToSunset(now, lat, lon) / 3600000);
+
+  // Update the display
+  let aux_info = document.getElementById('aux_info');
+  aux_info.innerHTML = `<span title="Latitude">${lat.toFixed(3)}</span>, ` +
+      `<span title="Longitude">${lon.toFixed(3)}</span> | ` +
+      `<span title="Sun elevation">${sun_elevation}&deg;</span> `;
+  if (!isNaN(hrs_sunrise)) {
+    aux_info.innerHTML += `/ ` +
+        `<span title="Hours since sunrise">${hrs_sunrise.toFixed(1)}</span>` +
+        ` / <span title="Hours to sunset">${hrs_sunset.toFixed(1)}</span> hr`;
+  }
+
+  if (distance) {
+    // Display distance to the previously clicked marker
+    aux_info.innerHTML += ' | <span title="Distance from selected marker">' +
+        formatDistance(distance) + '</span>';
+    // Clicking anywhere on the map hides the info bar for the last
+    // clicked marker
+    closeSpotInfo();
+  }
+  map.clearPrediction();
+  aux_info.style.display = 'block';
+}
+
 // Entry point
-function start() {
+async function start() {
   if (!location.search.includes('?') &&
       localStorage.getItem('load_last') == '1') {
     const history = loadHistory();
@@ -3392,109 +3155,23 @@ function start() {
       getURLParameter('et_units');
 
   // On mobile devices, allow for a larger click area
-  let click_tolerance = 0;
   const agent_regexp = new RegExp(
       'Mobi|Android|iPhone|iPad|iPod|Opera Mini|IEMobile|WPDesktop|' +
       'BlackBerry|BB|PlayBook');
   if (agent_regexp.test(navigator.userAgent)) {
-    click_tolerance = 15;
     is_mobile = true;
   }
 
-  // Recall previously stored map location and zoom level
-  let init_lat = localStorage.getItem('lat') || 40;
-  let init_lon = localStorage.getItem('lon') || -100;
-  let init_zoom_level = localStorage.getItem('zoom_level') || 2;
-
   // Make the map div visible (if not already)
   document.getElementById('map').style.display = 'block';
+  document.getElementById('change_map_type_button').style.display = 'block';
 
-  // Initialize the map
-  map = L.map('map',
-      { renderer : L.canvas({ tolerance: click_tolerance })});
-
-  // Use local English-label tiles for lower levels
-  L.tileLayer(
-      'osm_tiles/{z}/{x}/{y}.png',
-      { minZoom: 1,
-        maxZoom: 6,
-        attribution:
-            '<a href="https://github.com/wsprtv/wsprtv.github.io">' +
-            'WSPR TV</a> | &copy; <a href="https://www.openstreetmap.org' +
-            '/copyright">OpenStreetMap</a> contributors'
-      }).addTo(map);
-
-  // Use OSM-hosted tiles for higher levels
-  L.tileLayer(
-      'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-      { minZoom: 7, maxZoom: 16,
-        attribution:
-            '<a href="https://github.com/wsprtv/wsprtv.github.io">' +
-            'WSPR TV</a> | &copy; <a href="https://www.openstreetmap.org' +
-            '/copyright">OpenStreetMap</a> contributors'
-      }).addTo(map);
-
-  map.setView([init_lat, init_lon], init_zoom_level);
-
-  // Add day / night visualization and the scale indicator
-  let terminator = L.terminator(
-      { opacity: 0, fillOpacity: 0.3, interactive: false,
-        longitudeRange: (nomirror_param == null) ? 1080 : 720 })
-      .addTo(map);
-
-  let sun_elevation = Number(sun_elevation_param);
-  solar_isoline = L.solar_isoline({
-      elevation: sun_elevation, dashArray: '8,5',
-      opacity: 0.4, longitudeRange: (nomirror_param == null) ? 1080 : 360 })
-      .addTo(map);
-
-  L.control.scale().addTo(map);
-
-  // Draw the antimeridian
-  const am_options = (nomirror_param == null) ?
-      { color: 'gray', weight: 1, opacity: 0.2 } :
-      { color: 'gray', weight: 2, dashArray: '8,5', opacity: 0.4 };
-  L.polyline([[90, 180], [-90, 180]], am_options)
-      .addTo(map).bringToBack();
-  L.polyline([[90, -180], [-90, -180]], am_options)
-      .addTo(map).bringToBack();
-
-  if (nomirror_param != null) {
-    // Shade map portions beyond the antimeridian
-    L.polygon([[[-90, -720], [90, -720], [90, -180], [-90, -180]]], {
-      fillColor: 'black', fillOpacity: 0.12, stroke: false,
-      interactive: false
-    }).addTo(map);
-
-    L.polygon([[[-90, 180], [90, 180], [90, 720], [-90, 720]]], {
-      fillColor: 'black', fillOpacity: 0.12, stroke: false,
-      interactive: false
-    }).addTo(map);
+  if ((localStorage.getItem('map_type') || 'libre') == 'libre') {
+    map = new LibreMap();
+  } else {
+    map = new LeafletMap();
   }
-
-  // Draw the equator
-  L.polyline([[0, -360], [0, 360]],
-      { color: 'gray', weight: 1, opacity: 0.2 })
-      .addTo(map).bringToBack();
-
-  // On pan / zoom, save map location and zoom level
-  map.on('moveend', function() {
-    const center = map.getCenter();
-    localStorage.setItem('lat', center.lat);
-    localStorage.setItem('lon', center.lng);
-
-    // Readjust the map when moving across the antimeridian
-    const wrapped_center = map.wrapLatLng(center);
-    if (Math.abs(center.lng - wrapped_center.lng) > 1e-8) {
-      map.setView(wrapped_center, map.getZoom(), { animate: false });
-    }
-  });
-  map.on('zoomend', function() {
-    localStorage.setItem('zoom_level', map.getZoom());
-  });
-
-  // Display auxiliary info for clicks on the map outside of markers
-  map.on('click', onMapClick);
+  await map.waitToLoad();
 
   // Handle clicks on the "Go" button
   document.getElementById('go_button').addEventListener(
@@ -3531,6 +3208,10 @@ function start() {
     this.value = params ? params.band : '20m';
   });
 
+  // Handle clicks on the "Change map type" button
+  document.getElementById('change_map_type_button').addEventListener(
+      'click', changeMapType);
+
   // Handle clicks on the "Show data" button
   document.getElementById('show_data_button').addEventListener(
       'click', showDataView);
@@ -3550,15 +3231,1004 @@ function start() {
 
     // Update the "Last ago" timestamp
     let last_age = document.getElementById('last_age');
-    if (last_age && last_marker) {
+    if (last_age && last_attached_spot) {
       last_age.innerHTML = createToggleUTCLink(
-          formatDuration(new Date(), last_marker.spot.ts));
+          formatDuration(new Date(), last_attached_spot.ts));
+    }
+  }, 30 * 1000);
+}
+
+function get_solar_isoline(altitude = 0, invert = false,
+                           close = false, n = 180) {
+  const now = new Date();
+  const doy = Math.floor(
+      (now - new Date(Date.UTC(now.getUTCFullYear(), 0, 1))) / 86400000);
+  const t = now.getUTCHours() + now.getUTCMinutes() / 60 +
+      now.getUTCSeconds() / 3600;
+  const b = (2 * Math.PI / 365) * (doy - 82);
+  const decl = 23.44 * Math.sin(b);
+  const eot = 9.87 * Math.sin(2 * b) - 7.53 * Math.cos(b) - 1.5 * Math.sin(b);
+  const lat1 = (invert ? -1 : 1) * decl * Math.PI / 180;
+  const lon1 = (180 - 15 * t - eot / 4 - (invert ? 180 : 0)) * Math.PI / 180;
+  const d = (90 - altitude) * Math.PI / 180;
+
+  const points = [];
+  let last_point;
+  for (let i = 0; i <= n; i++) {
+    const bearing = -(2 * Math.PI * i) / n;
+    const lat2 = Math.asin(Math.sin(lat1) * Math.cos(d) +
+        Math.cos(lat1) * Math.sin(d) * Math.cos(bearing));
+    let lon2 = lon1 + Math.atan2(
+        Math.sin(bearing) * Math.sin(d) * Math.cos(lat1),
+        Math.cos(d) - Math.sin(lat1) * Math.sin(lat2));
+    const point = (close && i == n) ?
+        points[0] : [lat2 * 180 / Math.PI, lon2 * 180 / Math.PI];
+    if (close && last_point && Math.abs(last_point[1] - point[1]) > 180) {
+      for (let i = 0; i <= 360; i = i + 60) {
+        points.push((lat1 < 0) ?
+            [-90, last_point[1] + i] : [90, last_point[1] - i]);
+      }
+      points.push([last_point[0], last_point[1] + ((lat1 < 0) ? 360 : -360)]);
+    }
+    points.push(point);
+    last_point = point;
+  }
+  return points;
+}
+
+class LeafletMap {
+  constructor() {
+    // Initialize the map
+    const map = L.map('map',
+        { renderer : L.canvas({ tolerance: is_mobile ? 15 : 0 })});
+
+    // Use local English-label tiles for lower levels
+    L.tileLayer(
+        'osm_tiles/{z}/{x}/{y}.png',
+        { minZoom: 1,
+          maxZoom: 6,
+          attribution:
+              '<a href="https://github.com/wsprtv/wsprtv.github.io">' +
+              'WSPR TV</a> | &copy; <a href="https://www.openstreetmap.org' +
+              '/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+    // Use OSM-hosted tiles for higher levels
+    L.tileLayer(
+        'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        { minZoom: 7, maxZoom: 16,
+          attribution:
+              '<a href="https://github.com/wsprtv/wsprtv.github.io">' +
+              'WSPR TV</a> | &copy; <a href="https://www.openstreetmap.org' +
+              '/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+    // Recall previously stored map location and zoom level
+    let init_lat = localStorage.getItem('lat') || 40;
+    let init_lon = localStorage.getItem('lon') || -100;
+    let init_zoom_level = localStorage.getItem('zoom_level') || 2;
+    map.setView([init_lat, init_lon], init_zoom_level);
+
+    const terminator_points = get_solar_isoline(0, true, true);
+    const terminator_offsets = [0, 360, 720];
+    let terminators = [];
+    for (const offset of terminator_offsets) {
+      terminators.push(L.polygon(
+          terminator_points.map(p => [p[0], p[1] + offset]), {
+            interactive: false,
+            color: '#000',
+            opacity: 0,
+            fillColor: '#000',
+            fillOpacity: 0.3 }).addTo(map));
     }
 
-    // Update the terminator (day / night overlay) periodically
-    terminator.setTime(new Date());
-    if (solar_isoline) solar_isoline.setTime(new Date());
-  }, 30 * 1000);
+    let sun_elevation = Number(sun_elevation_param)
+    let isoline_points = (sun_elevation > 0 && sun_elevation < 60) ?
+        get_solar_isoline(sun_elevation) : [];
+    this.solar_isoline_offsets = [0, 360, 720];
+    this.solar_isolines = [];
+    for (const offset of this.solar_isoline_offsets) {
+      this.solar_isolines.push(L.polyline(
+          isoline_points.map(p => [p[0], p[1] + offset]), {
+            interactive: false,
+            weight: 1.3,
+            color: 'gray',
+            dashArray: '8,5',
+            opacity: 0.5
+          }).addTo(map));
+    }
+
+    L.control.scale().addTo(map);
+
+    // Draw the antimeridian
+    const am_options = (nomirror_param == null) ?
+        { color: 'gray', weight: 1, opacity: 0.2 } :
+        { color: 'gray', weight: 2, dashArray: '8,5', opacity: 0.4 };
+    L.polyline([[90, 180], [-90, 180]], am_options)
+        .addTo(map).bringToBack();
+    L.polyline([[90, -180], [-90, -180]], am_options)
+        .addTo(map).bringToBack();
+
+    if (nomirror_param != null) {
+      // Shade map portions beyond the antimeridian
+      L.polygon([[[-90, -720], [90, -720], [90, -180], [-90, -180]]], {
+        fillColor: 'black', fillOpacity: 0.12, stroke: false,
+        interactive: false
+      }).addTo(map);
+
+      L.polygon([[[-90, 180], [90, 180], [90, 720], [-90, 720]]], {
+        fillColor: 'black', fillOpacity: 0.12, stroke: false,
+        interactive: false
+      }).addTo(map);
+    }
+
+    // Draw the equator
+    L.polyline([[0, -360], [0, 360]],
+        { color: 'gray', weight: 1, opacity: 0.2 })
+        .addTo(map).bringToBack();
+
+    // On pan / zoom, save map location and zoom level
+    map.on('moveend', () => {
+      const center = map.getCenter();
+      localStorage.setItem('lat', center.lat);
+      localStorage.setItem('lon', center.lng);
+
+      // Readjust the map when moving across the antimeridian
+      const wrapped_center = map.wrapLatLng(center);
+      if (Math.abs(center.lng - wrapped_center.lng) > 1e-8) {
+        map.setView(wrapped_center, map.getZoom(), { animate: false });
+      }
+    });
+    map.on('zoomend', function() {
+      localStorage.setItem('zoom_level', map.getZoom());
+    });
+
+    // Display auxiliary info for clicks on the map outside of markers
+    map.on('click', (e) => this.onMapClick(e));
+
+    this.terminator_updater = setInterval(() => {
+      // Update the terminator (day / night overlay) periodically
+      const terminator_points = get_solar_isoline(0, true, true);
+      for (let i = 0; i < terminator_offsets.length; i++) {
+        terminators[i].setLatLngs(
+            terminator_points.map(p => [p[0], p[1] + terminator_offsets[i]]));
+      }
+    }, 30 * 1000);
+
+    this.map = map;
+    this.markers = [];
+    this.marker_group = null;
+    this.marker_path = null;
+    this.rx_markers = [];
+    this.rx_paths = [];
+    this.prediction_line = null;
+    this.prediction_markers = null;
+  }
+
+  waitToLoad() {
+  }
+
+  remove() {
+    this.map.off('moveend');
+    this.map.off('zoomend');
+    clearInterval(this.terminator_updater);
+    this.map.remove();
+  }
+
+  invalidate() {
+    this.map.invalidateSize();
+  }
+
+  // Draws the track on the map
+  displayTrack(spots) {
+    this.clear();
+    this.marker_group = L.featureGroup();
+
+    let highlighted_marker;
+    for (let i = 0; i < spots.length; i++) {
+      let spot = spots[i];
+      if (spot.is_unattached && show_unattached_param == null) {
+        continue;
+      }
+
+      let marker = null;
+      if (spot.grid.length < 6) {
+        // Grid4
+        marker = L.circleMarker([spot.lat, spot.lon],
+            { radius: 5, color: 'black',
+              fillColor: spot.is_invalid_gps ?
+                  '#fbb' : (spot.is_unattached ?
+                      'white' : (spot.fill || '#cfefff')),
+              weight: 1,
+              stroke: true, fillOpacity: 1 });
+      } else {
+        // Grid6
+        marker = L.circleMarker([spot.lat, spot.lon],
+            { radius: 7, color: 'black',
+              fillColor: spot.is_invalid_gps ?
+                  '#fbb' : (spot.is_unattached ?
+                      'white' : (spot.fill || '#add8e6')),
+              weight: 1,
+              stroke: true, fillOpacity: 1 });
+      }
+      if (spot == highlighted_spot) {
+        highlighted_marker = marker;
+      }
+      marker.spot = spot;
+      marker.addTo(this.marker_group);
+      this.markers.push(marker);
+    }
+
+    // Add lines between markers
+    let path = [];
+    let first_attached_marker = null;
+    let last_attached_marker = null;
+    for (let i = 0; i < this.markers.length; i++) {
+      const marker = this.markers[i];
+      if (marker.spot.is_unattached) continue;
+      if (path.length == 0) {
+        first_attached_marker = marker;
+        path = [[[marker.getLatLng().lat, marker.getLatLng().lng]]];
+      }
+      extendPath(path, marker.getLatLng().lat, marker.getLatLng().lng,
+                 false, true);
+      last_attached_marker = marker;
+    }
+
+    if (params.tracker != 'unknown') {
+      this.marker_path = L.polyline(path, { color: '#00cc00' });
+      this.marker_path.addTo(this.map);
+    }
+
+    this.marker_group.addTo(this.map);
+
+    // Highlight first / last markers
+    if (first_attached_marker) {
+      first_attached_marker.setStyle({ fillColor: '#3cb371' });
+      first_attached_marker.bringToFront();
+    }
+
+    if (last_attached_marker) {
+      last_attached_marker.setStyle({ fillColor: 'red' });
+      last_attached_marker.bringToFront();
+    }
+
+    if (highlighted_marker) {
+      highlighted_marker.setStyle({ fillColor: '#ffdd03' });
+      highlighted_marker.bringToFront();
+    }
+
+    if (nomirror_param == null) this.mirrorTrack();
+
+    this.marker_group.on('mouseover', (e) => this.onMarkerMouseover(e));
+    this.marker_group.on('mouseout', (e) => this.onMarkerMouseout(e));
+    this.marker_group.on('click', (e) => this.onMarkerClick(e));
+  }
+
+  mirrorTrack() {
+    for (const marker of this.markers) {
+      let marker1 = L.circleMarker(
+          [marker.getLatLng().lat, marker.getLatLng().lng + 360],
+          marker.options).addTo(this.marker_group);
+      marker1.spot = marker.spot;
+      let marker2 = L.circleMarker(
+          [marker.getLatLng().lat, marker.getLatLng().lng - 360],
+          marker.options).addTo(this.marker_group);
+      marker2.spot = marker.spot;
+    }
+    if (this.marker_path) {
+      // Mirror marker line
+      const lat_lons1 = this.marker_path.getLatLngs().map(l =>
+          l.map((p) => [p.lat, p.lng + 360]));
+      const lat_lons2 = this.marker_path.getLatLngs().map(l =>
+          l.map((p) => [p.lat, p.lng - 360]));
+      this.marker_path.setLatLngs(
+          [...this.marker_path.getLatLngs(), lat_lons1, lat_lons2]);
+    }
+  }
+
+  displayPrediction(markers, path) {
+    if (nomirror_param == null) {
+      path = [...path,
+              ...path.map(l => l.map(p => [p[0], p[1] + 360])),
+              ...path.map(l => l.map(p => [p[0], p[1] - 360]))];
+    }
+    this.prediction_line = L.polyline(path, { color: '#777', weight: 2 });
+    this.prediction_line.addTo(this.map);
+
+    this.prediction_markers = [];
+    let current_location_marker;
+    for (const offset of (nomirror_param == null) ? [0, 360, -360] : [0]) {
+      for (const [ts, lat, lon, speed, current_location] of markers) {
+        const radius = current_location ? 7 :
+            (((params.use_utc ? ts.getUTCHours() : ts.getHours()) == 0) ? 6 : 4);
+        let marker = L.circleMarker(
+            [lat, lon + offset],
+            { radius: radius,
+              color: current_location ? 'red' : 'black',
+              fillColor: '#bbb', weight: 1, stroke: true,
+              fillOpacity: 1 }).addTo(this.map);
+        marker.on('click', function(e) {
+          L.DomEvent.stopPropagation(e);
+        });
+        const sun_elevation = getSunElevation(ts, lat, lon);
+        const ts_suffix = params.use_utc ? ':00 UTC | ' : ':00 | ';
+        marker.bindTooltip(
+            (current_location ? 'Now | ' : (formatTimestamp(ts).slice(0, 13) +
+                ts_suffix)) +
+            formatSpeed([speed, 0]) + ' | ' + sun_elevation + '&deg;',
+            { direction: 'top', opacity: 0.8 });
+        this.prediction_markers.push(marker);
+        if (current_location) current_location_marker = marker;
+      }
+      if (current_location_marker) current_location_marker.bringToFront();
+    }
+  }
+
+  centerOn(lat, lon) {
+    this.map.setView([lat, lon], this.map.getZoom(),
+        { animate: false });
+  }
+
+  clear() {
+    if (this.marker_group) {
+      this.marker_group.clearLayers();
+      this.map.removeLayer(this.marker_group);
+      if (this.marker_path) this.map.removeLayer(this.marker_path);
+      this.markers = [];
+      this.marker_group = null;
+      this.marker_path = null;
+    }
+    this.hideRXInfo();
+    this.clearPrediction();
+  }
+
+  clearPrediction() {
+    if (this.prediction_line) {
+      this.map.removeLayer(this.prediction_line);
+      this.prediction_markers.forEach(marker => this.map.removeLayer(marker));
+      this.prediction_line = null;
+      this.prediction_markers = null;
+    }
+  }
+
+  hideRXInfo() {
+    if (this.rx_markers) {
+      this.rx_markers.forEach(rx_marker => this.map.removeLayer(rx_marker));
+      delete this.rx_markers;
+      this.rx_paths.forEach(rx_path => this.map.removeLayer(rx_path));
+      delete this.rx_paths;
+    }
+  }
+
+  updateSolarIsoline(sun_elevation) {
+    const isoline_points = (sun_elevation > 0 && sun_elevation < 60) ?
+        get_solar_isoline(sun_elevation) : [];
+    for (let i = 0; i < this.solar_isoline_offsets; i++) {
+      this.solar_isolines.setLatLngs(isoline_points.map(
+          p => [p[0], p[1] + this.solar_isoline_offsets[i]]));
+    }
+  }
+
+  onMapClick(e) {
+    if (this.map.getContainer().querySelector('.leaflet-tooltip')) {
+      // Allow all tooltips to close
+      return;
+    }
+    // Display lat / lng / sun elevation of clicked point
+    const now = new Date();
+    const lat = e.latlng.lat;
+    const lon = e.latlng.lng;
+    const distance = selected_spot ?
+        e.latlng.distanceTo([selected_spot.lat, selected_spot.lon]) : null;
+    displayAuxInfo(now, lat, lon, distance);
+  }
+
+  onMarkerMouseover(e) {
+    let marker = e.layer;
+    if (marker.spot != selected_spot) {
+      this.hideRXInfo();
+      selected_spot = null;
+    }
+    displaySpotInfo(marker.spot, e.containerPoint);
+  }
+
+  onMarkerMouseout(e) {
+    let marker = e.layer;
+    if (marker.spot != selected_spot) {
+      let spot_info = document.getElementById('spot_info');
+      spot_info.style.display = 'none';
+      selected_spot = null;
+    }
+  }
+
+  onMarkerClick(e) {
+    let marker = e.layer;
+    const spot = marker.spot;
+    if (spot == selected_spot) {
+      this.hideRXInfo();
+      document.getElementById('spot_info').style.display = 'none';
+      selected_spot = null;
+    } else {
+      this.hideRXInfo();
+      selected_spot = spot;
+      displaySpotInfo(spot, e.containerPoint);
+      if (!spot.tx_ts) {
+        this.rx_markers = [];
+        this.rx_paths = [];
+        const unique_rx = [...new Map(spot.slots.flatMap(slot => slot.rx).
+            map(rx => [rx.cs, rx])).values()];
+        unique_rx.forEach(rx => {
+          let rx_lat_lon = maidenheadToLatLon(rx.grid);
+          let dist = marker.getLatLng().distanceTo(rx_lat_lon);
+          const marker_lat_lon = marker.getLatLng().wrap();
+          let path = [[[marker_lat_lon.lat, marker_lat_lon.lng]]];
+          extendPath(path, rx_lat_lon[0], rx_lat_lon[1],
+                     (spots.length < 20000) ? true : false);
+          for (const offset of
+               (nomirror_param == null) ? [0, 360, -360] : [0]) {
+            let rx_marker = L.circleMarker(
+                [rx_lat_lon[0], rx_lat_lon[1] + offset],
+                { radius: 6, color: 'black',
+                  fillColor: 'yellow', weight: 1, stroke: true,
+                  fillOpacity: 1 }).addTo(this.map);
+            rx_marker.on('click', function(e) {
+              L.DomEvent.stopPropagation(e);
+            });
+            rx_marker.bindTooltip(
+                `${rx.cs} ${formatDistance(dist)} ${rx.snr} dB`,
+                  { direction: 'top', opacity: 0.8 });
+            this.rx_markers.push(rx_marker);
+            const offset_path =
+                path.map(l => l.map((p) => [p[0], p[1] + offset]));
+            let rx_path = L.polyline(offset_path,
+                { weight: 2, color: 'blue', opacity: 0.4 }
+                ).addTo(this.map).bringToBack();
+            this.rx_paths.push(rx_path);
+          }
+        });
+      }
+    }
+    L.DomEvent.stopPropagation(e);
+  }
+}
+
+class LibreMap {
+  constructor() {
+    let init_lat = localStorage.getItem('lat') || 40;
+    let init_lon = localStorage.getItem('lon') || -100;
+    let init_zoom_level = localStorage.getItem('zoom_level') || 3;
+    let init_projection = localStorage.getItem('projection') || 'mercator';
+    const map = new maplibregl.Map({
+      container: 'map',
+      style: 'map_style.json',
+      center: [init_lon, init_lat],
+      zoom: init_zoom_level,
+      minZoom: 0.99,
+      maxZoom: 16,
+      clickTolerance: is_mobile ? 15 : 3
+    });
+    this.map = map;
+
+    map.dragRotate.disable();
+    map.touchZoomRotate.disableRotation();
+
+    map.on('style.load', () => {
+      map.setProjection({ type: init_projection });
+
+      map.addControl(new maplibregl.NavigationControl({
+        showCompass: false }), 'top-left');
+
+      this.scale_control = new maplibregl.ScaleControl(
+        { maxWidth: 100, unit: 'metric' }, 'bottom-left');
+      map.addControl(this.scale_control);
+
+      map.addControl(new maplibregl.GlobeControl('top-left'));
+
+      map.addSource('graticules', {
+        type: 'geojson',
+        data: {
+          type: 'FeatureCollection',
+          features: [
+            {
+              type: 'Feature',
+              geometry: {
+                type: 'MultiLineString',
+                coordinates: [
+                  [[-180, 0], [180, 0]],
+                  [[180, 90], [180, -90]]
+                ]
+              },
+              properties: { globe_only: false },
+            }, {
+              type: 'Feature',
+              geometry: {
+                type: 'MultiLineString',
+                coordinates: [
+                  [[-180, 85], [180, 85]],
+                  [[-180, 60], [180, 60]],
+                  [[-180, 30], [180, 30]],
+                  [[-180, -30], [180, -30]],
+                  [[-180, -60], [180, -60]],
+                  [[-180, -85], [180, -85]],
+                  [[0, 90], [0, -90]],
+                  [[30, 90], [30, -90]],
+                  [[60, 90], [60, -90]],
+                  [[90, 90], [90, -90]],
+                  [[120, 90], [120, -90]],
+                  [[150, 90], [150, -90]],
+                  [[210, 90], [210, -90]],
+                  [[240, 90], [240, -90]],
+                  [[270, 90], [270, -90]],
+                  [[300, 90], [300, -90]],
+                  [[330, 90], [330, -90]]
+                ]
+              },
+              properties: { globe_only: true },
+            }
+          ]
+        }
+      });
+
+      map.addLayer({
+        id: 'graticules',
+        type: 'line',
+        source: 'graticules',
+        paint: { 'line-color': '#777', 'line-width': 0.5,
+                 'line-opacity': 0.3 }
+      });
+
+      const terminator_points =
+          get_solar_isoline(0, true, true).map(p => [p[1], p[0]]);
+
+      map.addSource('terminator', {
+        type: 'geojson',
+        data: {
+          type: 'Feature',
+          geometry: {
+            type: 'Polygon',
+            coordinates: [terminator_points]
+          }
+        },
+        buffer: 0.001
+      });
+
+      map.addLayer({
+        id: 'terminator',
+        type: 'fill',
+        source: 'terminator',
+        paint: {
+          'fill-color': '#000',
+          'fill-opacity': 0.2,
+        }
+      });
+
+      this.terminator_updater = setInterval(() => {
+        const terminator_points =
+            get_solar_isoline(0, true, true).map(p => [p[1], p[0]]);
+        this.map.getSource('terminator').setData({
+          type: 'Feature',
+          geometry: {
+            type: 'Polygon',
+            coordinates: [terminator_points]
+          }
+        });
+      }, 30 * 1000);
+
+      let sun_elevation = Number(sun_elevation_param)
+      let isoline_points = (sun_elevation > 0 && sun_elevation < 60) ?
+          get_solar_isoline(sun_elevation).map(p => [p[1], p[0]]) : [];
+
+      map.addSource('isoline', {
+        type: 'geojson',
+        data: {
+          type: 'Feature',
+          geometry: {
+            type: 'LineString',
+            coordinates: isoline_points
+          }
+        },
+        buffer: 0.001
+      });
+
+      map.addLayer({
+        id: 'isoline',
+        type: 'line',
+        source: 'isoline',
+        paint: {
+          'line-color': '#777',
+          'line-width': 1,
+          'line-opacity': 0.7,
+          'line-dasharray': [5, 3]
+        }
+      });
+
+      map.on('projectiontransition', () => {
+        this.updateProjection();
+      });
+      this.updateProjection();
+
+      map.on('moveend', () => {
+        const center = map.getCenter();
+        localStorage.setItem('lat', center.lat);
+        localStorage.setItem('lon', center.lng);
+      });
+
+      map.on('zoomend', () => {
+        localStorage.setItem('zoom_level', map.getZoom());
+      });
+
+      map.on('click', (e) => this.onMapClick(e));
+
+      this.prediction_line = null;
+      this.prediction_markers = null;
+      this.solar_isoline = null;
+    });
+  }
+
+  updateProjection() {
+    const projection = this.map.getProjection().type;
+    localStorage.setItem('projection', projection);
+    this.map.setFilter('graticules', projection == 'globe' ?
+        null : ['!=', ['get', 'globe_only'], true]);
+  }
+
+  remove() {
+    clearInterval(this.terminator_updater);
+    this.map.remove();
+  }
+
+  invalidate() {
+  }
+
+  async waitToLoad() {
+    while (!this.map.isStyleLoaded()) {
+      await new Promise(r => setTimeout(r, 100));
+    }
+  }
+
+  // Draws the track on the map
+  displayTrack(spots) {
+    this.clear();
+    this.scale_control.setUnit(params.units ? 'imperial' : 'metric');
+
+    let path = [];
+    if (params.tracker != 'unknown') {
+      for (let i = 0; i < spots.length; i++) {
+        const spot = spots[i];
+        if (spot.is_unattached) continue;
+        if (path.length == 0) {
+          path = [[[spot.lat, spot.lon]]];
+        } else {
+          extendPath(path, spot.lat, spot.lon, false, true);
+        }
+      }
+    }
+
+    this.map.addSource('path', {
+      type: 'geojson',
+      data: {
+        type: 'Feature',
+        geometry: {
+          type: 'MultiLineString',
+          coordinates: path.map(p => p.map(c => [c[1], c[0]]))
+        },
+        properties: { }
+      }
+    });
+
+    this.map.addLayer({
+      id: 'path',
+      type: 'line',
+      source: 'path',
+      paint: {
+        'line-color': '#00cc00',
+        'line-width': 3
+      }
+    });
+
+    const z_order = (f) => f.properties.i +
+        f.properties.is_highlighted * 3000000 +
+        f.properties.is_last * 2000000 +
+        f.properties.is_first * 1000000;
+
+    this.map.addSource('markers', {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: spots.map((s, i) => ({
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [s.lon, s.lat] },
+          properties: { i, ...s, is_first: s == first_attached_spot,
+            is_last: s == last_attached_spot,
+            is_highlighted: s == highlighted_spot,
+            fill: s == highlighted_spot ? '#ffdd03' :
+                (s == last_attached_spot ? 'red' :
+                (s == first_attached_spot ? '#3cb371' :
+                (s.is_invalid_gps ? '#fbb' :
+                (s.is_unattached ? '#fff' :
+                (s.fill ? s.fill :
+                (s.grid.length == 6 ? '#cfefff' : '#add8e6')))))),
+            radius: s.grid.length == 6 ? 7 : 5
+          }
+        })).sort((x, y) => z_order(x) - z_order(y))
+      }
+    });
+
+    this.map.addLayer({
+      id: 'markers',
+      type: 'circle',
+      source: 'markers',
+      filter: show_unattached_param == null ?
+          ['!=', ['coalesce', ['get', 'is_unattached'], false], true] :
+          ['all'],
+      paint: {
+        'circle-radius': ['get', 'radius'],
+        'circle-color': ['get', 'fill'],
+        'circle-stroke-width': 1,
+        'circle-stroke-color': '#000'
+      }
+    });
+
+    if (!this.added_marker_listeners) {
+      this.map.on('mouseenter', 'markers', (e) => this.onMarkerMouseover(e));
+      this.map.on('mouseleave', 'markers', (e) => this.onMarkerMouseout(e));
+      this.map.on('mousemove', 'markers', (e) => this.onMarkerMousemove(e));
+      this.map.on('click', 'markers', (e) => this.onMarkerClick(e));
+      this.added_marker_listeners = true;
+    }
+  }
+
+  displayPrediction(markers, path) {
+    const z_order = (f) => f.properties.i + f.properties.is_current * 1000000;
+    this.map.addSource('pred_markers', {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: markers.map((s, i) => ({
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [s[2], s[1]] },
+          properties: { i, is_current: s[4],
+            radius: s[4] ? 7 : (((params.use_utc ? s[0].getUTCHours() :
+                s[0].getHours()) == 0) ? 6 : 4) },
+        })).sort((x, y) => z_order(x) - z_order(y))
+      }
+    });
+
+    this.map.addLayer({
+      id: 'pred_markers',
+      type: 'circle',
+      source: 'pred_markers',
+      paint: {
+        'circle-radius': ['get', 'radius'],
+        'circle-color': '#bbb',
+        'circle-stroke-width': 1,
+        'circle-stroke-color': ['case',
+          ['coalesce', ['get', 'is_current'], false], 'red', 'black']
+      }
+    });
+
+    this.map.addSource('pred_path', {
+      type: 'geojson',
+      data: {
+        type: 'Feature',
+        geometry: {
+          type: 'MultiLineString',
+          coordinates: path.map(p => p.map(c => [c[1], c[0]]))
+        },
+        properties: { }
+      }
+    });
+
+    this.map.addLayer({
+      id: 'pred_path',
+      type: 'line',
+      source: 'pred_path',
+      paint: {
+        'line-color': '#777',
+        'line-width': 2,
+        'line-opacity': 0.5
+      }
+    }, 'markers');
+
+
+    const tooltip = new maplibregl.Popup({
+      closeButton: false,
+      closeOnClick: false,
+      offset: 10
+    });
+
+    this.map.on('mousemove', 'pred_markers', (e) => {
+      const [ts, lat, lon, speed, is_current] =
+          markers[e.features[0].properties.i];
+      const sun_elevation = getSunElevation(ts, lat, lon);
+      const ts_suffix = params.use_utc ? ':00 UTC | ' : ':00 | ';
+      const label = (is_current ? 'Now | ' :
+          (formatTimestamp(ts).slice(0, 13) + ts_suffix)) +
+          formatSpeed([speed, 0]) + ' | ' + sun_elevation + '&deg;';
+      tooltip.setLngLat(e.lngLat)
+          .setHTML(`<div>${label}</div>`).addTo(this.map);
+    });
+
+    this.map.on('mouseleave', 'pred_markers', () => tooltip.remove());
+  }
+
+  centerOn(lat, lon) {
+    this.map.jumpTo({ center: [lon, lat] });
+  }
+
+  clear() {
+    if (this.map.getSource('markers') != undefined) {
+      this.map.removeLayer('markers');
+      this.map.removeLayer('path');
+      this.map.removeSource('markers');
+      this.map.removeSource('path');
+    }
+    this.hideRXInfo();
+    this.clearPrediction();
+  }
+
+  clearPrediction() {
+    if (this.map.getSource('pred_markers') != undefined) {
+      this.map.removeLayer('pred_markers');
+      this.map.removeLayer('pred_path');
+      this.map.removeSource('pred_markers');
+      this.map.removeSource('pred_path');
+    }
+  }
+
+  hideRXInfo() {
+    if (this.map.getSource('rx_markers') != undefined) {
+      this.map.removeLayer('rx_markers');
+      this.map.removeLayer('rx_paths');
+      this.map.removeSource('rx_markers');
+      this.map.removeSource('rx_paths');
+    }
+  }
+
+  updateSolarIsoline(sun_elevation) {
+    let isoline_points = (sun_elevation > 0 && sun_elevation < 60) ?
+        get_solar_isoline(sun_elevation).map(p => [p[1], p[0]]) : [];
+
+    this.map.getSource('isoline').setData({
+      type: 'Feature',
+      geometry: {
+        type: 'LineString',
+        coordinates: isoline_points
+      }
+    });
+  }
+
+  onMapClick(e) {
+    if (this.map.getLayer('markers') && this.map.queryRenderedFeatures(
+            e.point, { layers: ['markers'] }).length) return;
+    // Display lat / lng / sun elevation of clicked point
+    const now = new Date();
+    const lat = e.lngLat.lat;
+    const lon = e.lngLat.lng;
+    const distance = selected_spot ? L.latLng([lat, lon]).distanceTo(
+        [selected_spot.lat, selected_spot.lon]) : null;
+    displayAuxInfo(now, lat, lon, distance);
+  }
+
+  onMarkerMouseover(e) {
+    const spot = spots[e.features[0].properties.i];
+    if (spot != selected_spot) {
+      this.hideRXInfo();
+      selected_spot = null;
+    }
+    this.hovered_spot = spot;
+    displaySpotInfo(spot, e.point);
+    this.map.getCanvas().style.cursor = 'pointer';
+  }
+
+  onMarkerMouseout(e) {
+    if (this.hovered_spot != selected_spot) {
+      let spot_info = document.getElementById('spot_info');
+      spot_info.style.display = 'none';
+      selected_spot = null;
+    }
+    this.hovered_spot = null;
+    this.map.getCanvas().style.cursor = '';
+  }
+
+  onMarkerMousemove(e) {
+    const spot = spots[e.features[0].properties.i];
+    if (spot != this.hovered_spot) {
+      this.onMarkerMouseover(e);
+    }
+  }
+
+  onMarkerClick(e) {
+    const spot = spots[e.features[0].properties.i];
+    if (spot == selected_spot) {
+      this.hideRXInfo();
+      document.getElementById('spot_info').style.display = 'none';
+      selected_spot = null;
+    } else {
+      this.hideRXInfo();
+      selected_spot = spot;
+      displaySpotInfo(spot, e.point);
+      if (!spot.tx_ts) {
+        const unique_rx = [...new Map(spot.slots.flatMap(slot => slot.rx).
+            map(rx => [rx.cs, rx])).values()].
+            map(rx => ({ ...rx, lat_lon: maidenheadToLatLon(rx.grid) }));
+
+        let paths = [];
+        for (const rx of unique_rx) {
+          paths.push([[spot.lat, spot.lon]]);
+          extendPath(paths, rx.lat_lon[0], rx.lat_lon[1], true);
+        }
+
+        this.map.addSource('rx_markers', {
+          type: 'geojson',
+          data: {
+            type: 'FeatureCollection',
+            features: unique_rx.map(rx => ({
+              type: 'Feature',
+              geometry: { type: 'Point', coordinates:
+                [rx.lat_lon[1], rx.lat_lon[0]] },
+              properties: { ...rx, lat: rx.lat_lon[0], lon: rx.lat_lon[1] }
+            }))
+          }
+        });
+
+        this.map.addLayer({
+          id: 'rx_markers',
+          type: 'circle',
+          source: 'rx_markers',
+          paint: {
+            'circle-radius': 6,
+            'circle-color': 'yellow',
+            'circle-stroke-width': 1,
+            'circle-stroke-color': '#000'
+          }
+        });
+
+        this.map.addSource('rx_paths', {
+          type: 'geojson',
+          data: {
+            type: 'FeatureCollection',
+            features: paths.map(path => ({
+              type: 'Feature',
+              geometry: { type: 'LineString', coordinates:
+                path.map(p => [p[1], p[0]]) },
+              properties: { }
+            }))
+          }
+        });
+
+        this.map.addLayer({
+          id: 'rx_paths',
+          type: 'line',
+          source: 'rx_paths',
+          paint: {
+            'line-color': 'blue',
+            'line-width': 2,
+            'line-opacity': 0.4
+          }
+        }, 'markers');
+
+
+        const tooltip = new maplibregl.Popup({
+          closeButton: false,
+          closeOnClick: false,
+          offset: 10
+        });
+
+        this.map.on('mousemove', 'rx_markers', (e) => {
+          const rx = e.features[0].properties;
+          let dist =
+              L.latLng([spot.lat, spot.lon]).distanceTo([rx.lat, rx.lon]);
+          tooltip.setLngLat(e.lngLat)
+              .setHTML(`<div>${rx.cs} ${formatDistance(dist)} ` +
+                       `${rx.snr} dB</div>`).addTo(this.map);
+        });
+
+        this.map.on('mouseleave', 'rx_markers', () => tooltip.remove());
+      }
+    }
+  }
 }
 
 start();
