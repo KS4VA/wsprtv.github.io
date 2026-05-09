@@ -3706,6 +3706,12 @@ class LibreMap {
       zoom: init_zoom_level,
       minZoom: 0.99,
       maxZoom: 16,
+      attributionControl: {
+        compact: true,
+        collapsed: true,
+        customAttribution:
+            '<a href="https://github.com/wsprtv/wsprtv.github.io">WSPR TV</a>',
+      }
     });
     this.map = map;
 
@@ -4165,6 +4171,16 @@ class LibreMap {
   }
 
   onMarkerMousemove(e) {
+    if (selected_spot) {
+      const tolerance = 5;
+      const bbox = [[e.point.x - tolerance, e.point.y - tolerance],
+                    [e.point.x + tolerance, e.point.y + tolerance]];
+      const features = this.map.queryRenderedFeatures(
+          bbox, { layers: ['markers'] });
+      for (const feature of features) {
+        if (spots[feature.properties.i] == selected_spot) return;
+      }
+    }
     const spot = spots[e.features[0].properties.i];
     if (spot != this.hovered_spot) {
       this.onMarkerMouseover(e);
