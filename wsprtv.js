@@ -3706,7 +3706,6 @@ class LibreMap {
       zoom: init_zoom_level,
       minZoom: 0.99,
       maxZoom: 16,
-      clickTolerance: is_mobile ? 15 : 3
     });
     this.map = map;
 
@@ -4038,7 +4037,11 @@ class LibreMap {
       offset: 10
     });
 
-    this.map.on('mousemove', 'pred_markers', (e) => {
+    if (this.predOnMarkerMousemove) {
+      this.map.off('mousemove', 'pred_markers', this.predOnMarkerMousemove);
+    }
+
+    this.predOnMarkerMousemove = (e) => {
       const [ts, lat, lon, speed, is_current] =
           markers[e.features[0].properties.i];
       const sun_elevation = getSunElevation(ts, lat, lon);
@@ -4048,9 +4051,14 @@ class LibreMap {
           formatSpeed([speed, 0]) + ' | ' + sun_elevation + '&deg;';
       tooltip.setLngLat(e.lngLat)
           .setHTML(`<div>${label}</div>`).addTo(this.map);
-    });
+    };
+    this.map.on('mousemove', 'pred_markers', this.predOnMarkerMousemove);
 
-    this.map.on('mouseleave', 'pred_markers', () => tooltip.remove());
+    if (this.predOnMarkerMouseleave) {
+      this.map.off('mouseleave', 'pred_markers', this.predOnMarkerMouseleave);
+    }
+    this.predOnMarkerMouseleave = () => tooltip.remove();
+    this.map.on('mouseleave', 'pred_markers', this.predOnMarkerMouseleave);
   }
 
   centerOn(lat, lon) {
@@ -4102,6 +4110,30 @@ class LibreMap {
   onMapClick(e) {
     if (this.map.getLayer('markers') && this.map.queryRenderedFeatures(
             e.point, { layers: ['markers'] }).length) return;
+    if (this.map.getLayer('pred_markers') && this.map.queryRenderedFeatures(
+            e.point, { layers: ['pred_markers'] }).length) return;
+    if (is_mobile) {
+      const tolerance = 15;
+      const bbox = [[e.point.x - tolerance, e.point.y - tolerance],
+                    [e.point.x + tolerance, e.point.y + tolerance]];
+      if (this.map.getLayer('markers')) {
+        const features = this.map.queryRenderedFeatures(
+            bbox, { layers: ['markers'] });
+        const p = e.point;
+        if (features.length) {
+          const closest_feature = features.reduce((x, y) => {
+            const px = this.map.project(x.geometry.coordinates);
+            const py = this.map.project(y.geometry.coordinates);
+            const dx = (px.x - p.x) ** 2 + (px.y - p.y) ** 2;
+            const dy = (py.x - p.x) ** 2 + (py.y - p.y) ** 2;
+            return dy < dx ? y : x;
+          });
+          e.features = [closest_feature];
+          this.onMarkerClick(e);
+          return;
+        }
+      }
+    }
     // Display lat / lng / sun elevation of clicked point
     const now = new Date();
     const lat = e.lngLat.lat;
