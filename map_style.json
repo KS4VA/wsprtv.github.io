@@ -46,6 +46,7 @@
       "type": "fill",
       "source": "openmaptiles",
       "source-layer": "park",
+      "minzoom": 12,
       "paint": {
         "fill-color": "#d8e8c8",
         "fill-opacity": 0.7,
@@ -57,6 +58,7 @@
       "type": "line",
       "source": "openmaptiles",
       "source-layer": "park",
+      "minzoom": 12,
       "paint": {
         "line-color": "rgba(228, 241, 215, 1)",
         "line-dasharray": [1, 1.5]
@@ -67,6 +69,7 @@
       "type": "fill",
       "source": "openmaptiles",
       "source-layer": "landuse",
+      "minzoom": 10,
       "maxzoom": 12,
       "filter": [
         "==",
@@ -114,6 +117,7 @@
       "type": "fill",
       "source": "openmaptiles",
       "source-layer": "landcover",
+      "minzoom": 12,
       "filter": [
         "==",
         [
@@ -152,7 +156,7 @@
       "type": "fill",
       "source": "openmaptiles",
       "source-layer": "landcover",
-      "minzoom": 12,
+      "minzoom": 16,
       "filter": [
         "==",
         [
@@ -3274,7 +3278,7 @@
       "type": "line",
       "source": "openmaptiles",
       "source-layer": "boundary",
-      "minzoom": 4,
+      "minzoom": 3.75,
       "filter": [
         "all",
         [
@@ -3452,6 +3456,10 @@
           ],
           [
             "get",
+            "name:latin"
+          ],
+          [
+            "get",
             "name"
           ]
         ],
@@ -3489,6 +3497,10 @@
           [
             "get",
             "name_en"
+          ],
+          [
+            "get",
+            "name:latin"
           ],
           [
             "get",
@@ -3539,6 +3551,10 @@
           [
             "get",
             "name_en"
+          ],
+          [
+            "get",
+            "name:latin"
           ],
           [
             "get",
@@ -3610,6 +3626,10 @@
           [
             "get",
             "name_en"
+          ],
+          [
+            "get",
+            "name:latin"
           ],
           [
             "get",
@@ -3692,6 +3712,10 @@
           ],
           [
             "get",
+            "name:latin"
+          ],
+          [
+            "get",
             "name"
           ]
         ],
@@ -3771,6 +3795,10 @@
           ],
           [
             "get",
+            "name:latin"
+          ],
+          [
+            "get",
             "name"
           ]
         ],
@@ -3823,6 +3851,10 @@
           ],
           [
             "get",
+            "name:latin"
+          ],
+          [
+            "get",
             "name"
           ]
         ],
@@ -3861,6 +3893,10 @@
           [
             "get",
             "name_en"
+          ],
+          [
+            "get",
+            "name:latin"
           ],
           [
             "get",
@@ -3928,6 +3964,10 @@
           ],
           [
             "get",
+            "name:latin"
+          ],
+          [
+            "get",
             "name"
           ]
         ],
@@ -3977,6 +4017,10 @@
           [
             "get",
             "name_en"
+          ],
+          [
+            "get",
+            "name:latin"
           ],
           [
             "get",
@@ -4250,6 +4294,10 @@
           ],
           [
             "get",
+            "name:latin"
+          ],
+          [
+            "get",
             "name"
           ]
         ],
@@ -4296,6 +4344,10 @@
           [
             "get",
             "name_en"
+          ],
+          [
+            "get",
+            "name:latin"
           ],
           [
             "get",
@@ -4360,6 +4412,10 @@
           ],
           [
             "get",
+            "name:latin"
+          ],
+          [
+            "get",
             "name"
           ]
         ],
@@ -4419,6 +4475,10 @@
           ],
           [
             "get",
+            "name:latin"
+          ],
+          [
+            "get",
             "name"
           ]
         ],
@@ -4464,6 +4524,10 @@
           [
             "get",
             "name_en"
+          ],
+          [
+            "get",
+            "name:latin"
           ],
           [
             "get",
@@ -4538,6 +4602,10 @@
           ],
           [
             "get",
+            "name:latin"
+          ],
+          [
+            "get",
             "name"
           ]
         ],
@@ -4608,6 +4676,10 @@
           ],
           [
             "get",
+            "name:latin"
+          ],
+          [
+            "get",
             "name"
           ]
         ],
@@ -4664,6 +4736,10 @@
           [
             "get",
             "name_en"
+          ],
+          [
+            "get",
+            "name:latin"
           ],
           [
             "get",
@@ -4724,6 +4800,10 @@
           ],
           [
             "get",
+            "name:latin"
+          ],
+          [
+            "get",
             "name"
           ]
         ],
@@ -4778,6 +4858,10 @@
           [
             "get",
             "name_en"
+          ],
+          [
+            "get",
+            "name:latin"
           ],
           [
             "get",
