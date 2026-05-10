@@ -3795,7 +3795,7 @@ class LibreMap {
             coordinates: [terminator_points]
           }
         },
-        buffer: 0.001
+        buffer: 0.5
       });
 
       map.addLayer({
@@ -3833,7 +3833,7 @@ class LibreMap {
             coordinates: isoline_points
           }
         },
-        buffer: 0.001
+        buffer: 0.5
       });
 
       map.addLayer({
