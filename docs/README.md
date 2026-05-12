@@ -494,7 +494,7 @@ the following transformation of `v` is needed before `BigNumber` is converted
 to a WSPR message:
 
 ```
-v = (v / 320) * 320 + (v % 5) * 64 + ((v / 5) % 4) + ((v / 20) % 16) * 4
+v = (v / 320) * 320 + (v % 5) * 64 + ((v / 5) % 64)
 ```
 
 This transformation effectively moves ET0's `HdrSlot` header from the beginning of
@@ -548,7 +548,7 @@ void SendBigNumber(uint64_t v) {
   if ((v % 2) == 0) {
     // Custom telemetry
     v = v >> 1;  // temporarily discard HdrTelemetryType
-    v = (v / 320) * 320 + (v % 5) * 64 + ((v / 5) % 4) + ((v / 20) % 16) * 4;
+    v = (v / 320) * 320 + (v % 5) * 64 + ((v / 5) % 64);
     v = v << 1;  // add HdrTelemetryType back
   }
   uint32_t m = v / 615600;
@@ -580,7 +580,7 @@ void ComputeBigNumber(uint32_t m, uint32_t n) {
   if ((v % 2) == 0) {
     // Custom telemetry
     v = v >> 1;  // temporarily discard HdrTelemetryType
-    v = (v / 320) * 320 + ((v / 4) % 16) * 20 + (v % 4) * 5 + ((v / 64) % 5);
+    v = (v / 320) * 320 + (v % 64) * 5 + ((v / 64) % 5);
     v = v << 1;  // add HdrTelemetryType back
   }
   return v;

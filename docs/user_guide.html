@@ -457,7 +457,7 @@ converted to special callsign WSPR messages differently than before. If <code cl
 <code class="notranslate">BigNumber</code> with its least significant bit (<code class="notranslate">HdrTelemetryType</code>) removed,
 the following transformation of <code class="notranslate">v</code> is needed before <code class="notranslate">BigNumber</code> is converted
 to a WSPR message:</p>
-<pre class="notranslate"><code class="notranslate">v = (v / 320) * 320 + (v % 5) * 64 + ((v / 5) % 4) + ((v / 20) % 16) * 4
+<pre class="notranslate"><code class="notranslate">v = (v / 320) * 320 + (v % 5) * 64 + ((v / 5) % 64)
 </code></pre>
 <p>This transformation effectively moves ET0's <code class="notranslate">HdrSlot</code> header from the beginning of
 <code class="notranslate">BigNumber</code> to the middle, where it used to be before Custom Telemetry was introduced.</p>
@@ -493,7 +493,7 @@ are encoded from <code class="notranslate">BigNumber</code> differently:</p>
   if ((v % 2) == 0) {
     // Custom telemetry
     v = v &gt;&gt; 1;  // temporarily discard HdrTelemetryType
-    v = (v / 320) * 320 + (v % 5) * 64 + ((v / 5) % 4) + ((v / 20) % 16) * 4;
+    v = (v / 320) * 320 + (v % 5) * 64 + ((v / 5) % 64);
     v = v &lt;&lt; 1;  // add HdrTelemetryType back
   }
   uint32_t m = v / 615600;
@@ -519,7 +519,7 @@ as shown below:</p>
   if ((v % 2) == 0) {
     // Custom telemetry
     v = v &gt;&gt; 1;  // temporarily discard HdrTelemetryType
-    v = (v / 320) * 320 + ((v / 4) % 16) * 20 + (v % 4) * 5 + ((v / 64) % 5);
+    v = (v / 320) * 320 + (v % 64) * 5 + ((v / 64) % 5);
     v = v &lt;&lt; 1;  // add HdrTelemetryType back
   }
   return v;

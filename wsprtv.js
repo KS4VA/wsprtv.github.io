@@ -788,8 +788,7 @@ function processCustomTelemetryMessage(spot, slot) {
   }
   let v = m * 307800 + (n >> 1);
   // Rearrange n to support Custom Telemetry (needed for ET0 compatibility)
-  v = Math.floor(v / 320) * 320 + (Math.floor(v / 4) % 16) * 20 +
-      (v % 4) * 5 + (Math.floor(v / 64) % 5);
+  v = Math.floor(v / 320) * 320 + (v % 64) * 5 + (Math.floor(v / 64) % 5);
   spot.raw_ct[slot] = v;
   return true;
 }
