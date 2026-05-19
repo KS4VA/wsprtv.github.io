@@ -1226,8 +1226,13 @@ function categorizeSpots() {
         }
       }
     }
-    if (!first_attached_spot) first_attached_spot = spot;
     last_attached_spot = spot;
+  }
+  for (let i = 0; i < spots.length; i++) {
+    if (!spots[i].is_unattached) {
+      first_attached_spot = spots[i];
+      break;
+    }
   }
 }
 
@@ -3952,7 +3957,7 @@ class LibreMap {
                 (s.is_invalid_gps ? '#fbb' :
                 (s.is_unattached ? '#fff' :
                 (s.fill ? s.fill :
-                (s.grid.length == 6 ? '#cfefff' : '#add8e6')))))),
+                (s.grid.length == 6 ? '#add8e6' : '#cfefff')))))),
             radius: s.grid.length == 6 ? 7 : 5
           }
         })).sort((x, y) => z_order(x) - z_order(y))
