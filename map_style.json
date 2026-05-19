@@ -31,7 +31,7 @@
           "interpolate",
           ["exponential", 1.5],
           ["zoom"],
-          0, 0.9, 7, 0.1
+          0, 0.9, 6, 0.1
         ]
       }
     }, {
@@ -99,6 +99,7 @@
       "type": "fill",
       "source": "openmaptiles",
       "source-layer": "landcover",
+      "minzoom": 7,
       "filter": ["==", ["get", "class"], "ice"],
       "paint": {
         "fill-antialias": false,
