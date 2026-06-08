@@ -2985,6 +2985,7 @@ function parseCustomTelemetrySpec() {
             next_divisor = 320;
           } else {
             // 's'
+            if (filter[1] < 1 || filter[1] > 4) return null;
             filters.push(filter);
           }
           continue;
