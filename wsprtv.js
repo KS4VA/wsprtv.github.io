@@ -778,9 +778,12 @@ function handleU4BVariants(spot, flag) {
 }
 
 function processCustomTelemetryMessage(spot, slot) {
+  if (spot.slots[slot].cs.length != 6) {
+    return false;
+  }
   const [m, n] = extractU4BQ01Payload(spot.slots[slot]);
   if (n % 2) {
-    // Not an custom telemetry message
+    // Not a custom telemetry message
     return false;
   }
   if (!spot.raw_ct) {
