@@ -1680,6 +1680,12 @@ function closeSpotInfo() {
   selected_spot = null;
 }
 
+// Max altitude -> hPa mapping
+const kPressureLevels = [[450, 'surface'], [1200, '900h'], [1750, '850h'],
+    [2500, '800h'], [3600, '700h'], [4850, '600h'], [6250, '500h'],
+    [8000, '400h'], [9500, '300h'], [10850, '250h'], [12600, '200h'],
+    [21750, '150h'], [100000, '10h']];
+
 function displaySpotInfo(spot, point) {
   let spot_info = document.getElementById('spot_info');
   spot_info.style.left = point.x + 50 + 'px';
@@ -1757,6 +1763,21 @@ function displaySpotInfo(spot, point) {
            'return false" style="color: #81cdff; text-decoration: none;">' +
            'Path Prediction</a><br>';
      }
+     if (Date.now() - spot.ts < 24 * 3600 * 1000) {
+       const level = kPressureLevels[
+           kPressureLevels.findIndex(l => l[0] >= spot.altitude)][1];
+       // See https://community.windy.com/topic/77/windy-com-url-parameters
+       const ts = formatTimestamp(spot.ts, 1).slice(0, 13).replace(' ', '-');
+       for (const [label, param] of
+            [['Wind', 'wind'], ['CTops', 'cloudtop'], ['Rain', 'rain']]) {
+         spot_info.innerHTML += '<a href="https://www.windy.com/?' +
+             `${param},${level},${ts},` +
+             spot.lat.toFixed(3) + ',' + spot.lon.toFixed(3) + ',5,d:picker" ' +
+             'style="color: #81cdff; text-decoration: none;" ' +
+             `target=new>${label}</a> | `;
+       }
+       spot_info.innerHTML = spot_info.innerHTML.slice(0, -3) + '<br>';
+     }
     // Add GoogleEarth view
     const d = spot.altitude / 0.23075;
     const dl = d / (111320 * Math.cos(spot.lat * 0.01745));
@@ -1767,8 +1788,8 @@ function displaySpotInfo(spot, point) {
         (spot.lon + dl).toFixed(3) + ',0a,' +
         dt + 'd,35y,90h,77t" ' +
         'style="color: #81cdff; text-decoration: none;" ' +
-        'target=new>GoogleEarth View</a>' +
-        '<br>(use CTRL-arrows<br>to look around)';
+        'title="Use CTRL-arrows to look around" ' +
+        'target=new>GoogleEarth View</a>';
   }
   spot_info.style.display = 'block';
 }
